@@ -20,13 +20,7 @@ import org.apache.flink.util.Collector
 import scala.collection.mutable.ListBuffer
 
 /**
-  * Copyright (c) 2018-2028 尚硅谷 All Rights Reserved 
-  *
-  * Project: UserBehaviorAnalysis
-  * Package: com.atguigu.hotitems_analysis
-  * Version: 1.0
-  *
-  * Created by wushengran on 2020/8/13 15:43
+  * 需求：每隔 5 分钟输出最近一小时内点击量最多的前 N 个商品。
   */
 
 // 定义输入数据样例类
@@ -38,43 +32,48 @@ case class ItemViewCount(itemId: Long, windowEnd: Long, count: Long)
 object HotItems {
   def main(args: Array[String]): Unit = {
     val env = StreamExecutionEnvironment.getExecutionEnvironment
+    //todo  如果是真实场景中，前后差5分钟，肯定不会出现乱序，但是在测试中，读的是文件，可能会出现乱序，为了显示的更合理，设置并行度为1
     env.setParallelism(1)
     env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime) // 定义事件时间语义
 
     // 从文件中读取数据，并转换成样例类，提取时间戳生成watermark
-//    val inputStream: DataStream[String] = env.readTextFile("D:\\Projects\\BigData\\UserBehaviorAnalysis\\HotItemsAnalysis\\src\\main\\resources\\UserBehavior.csv")
+    val inputStream: DataStream[String] = env.readTextFile("D:\\JavaRelation\\Workpaces\\myproject\\bigData\\flink2020\\UserBehaviorAnalysis\\HotItemsAnalysis\\src\\main\\resources\\UserBehavior.csv")
 
     // 从kafka读取数据
-    val properties = new Properties()
-    properties.setProperty("bootstrap.servers", "localhost:9092")
-    properties.setProperty("group.id", "consumer-group")
-    properties.setProperty("key.deserializer",
-      "org.apache.kafka.common.serialization.StringDeserializer")
-    properties.setProperty("value.deserializer",
-      "org.apache.kafka.common.serialization.StringDeserializer")
-
-    val inputStream = env.addSource( new FlinkKafkaConsumer[String]("hotitems", new SimpleStringSchema(), properties) )
+//    val properties = new Properties()
+//    properties.setProperty("bootstrap.servers", "localhost:9092")
+//    properties.setProperty("group.id", "consumer-group")
+//    properties.setProperty("key.deserializer",
+//      "org.apache.kafka.common.serialization.StringDeserializer")
+//    properties.setProperty("value.deserializer",
+//      "org.apache.kafka.common.serialization.StringDeserializer")
+//
+//    val inputStream = env.addSource( new FlinkKafkaConsumer[String]("hotitems", new SimpleStringSchema(), properties) )
 
     val dataStream: DataStream[UserBehavior] = inputStream
       .map(data => {
         val arr = data.split(",")
         UserBehavior(arr(0).toLong, arr(1).toLong, arr(2).toInt, arr(3), arr(4).toLong)
       })
+      //提取时间戳生成watermark
+      // TODO: 因为是已经排好序的升序的时间戳数据，所以用ascending即可 ，如果是乱序数据要用assignTimestampsAndWatermarks并传入BoundedOutOfOrdernessTimestampExtractor
       .assignAscendingTimestamps(_.timestamp * 1000L)
 
     // 得到窗口聚合结果
     val aggStream: DataStream[ItemViewCount] = dataStream
-      .filter(_.behavior == "pv") // 过滤pv行为
+      .filter(_.behavior == "pv") // 过滤出pv行为数据
       .keyBy("itemId") // 按照商品ID分组
       .timeWindow(Time.hours(1), Time.minutes(5)) // 设置滑动窗口进行统计
-      .aggregate(new CountAgg(), new ItemViewWindowResult())
+      .aggregate(new CountAgg(), new ItemViewWindowResult())//第一个参数是预聚合，第二个参数是触发时的窗口函数（入参为预聚合的结果）
 
+    //分组、排序(用到listState、定时器，所以需要大招 process Function)
+    // TODO: 为什么这里要重新分组？？？？
     val resultStream: DataStream[String] = aggStream
       .keyBy("windowEnd")    // 按照窗口分组，收集当前窗口内的商品count数据
       .process( new TopNHotItems(5) )     // 自定义处理流程
 
-    dataStream.print("data")
-    aggStream.print("agg")
+//    dataStream.print("data")
+//    aggStream.print("agg")
     resultStream.print()
 
     env.execute("hot items")
@@ -107,11 +106,12 @@ class AvgTs extends AggregateFunction[UserBehavior, (Long, Int), Long]{
 }
 
 // 自定义窗口函数WindowFunction
-class ItemViewWindowResult() extends WindowFunction[Long, ItemViewCount, Tuple, TimeWindow] {
+class ItemViewWindowResult() extends WindowFunction[Long, ItemViewCount, Tuple, TimeWindow] {//注意这里的tuple是flink中的tuple！
   override def apply(key: Tuple, window: TimeWindow, input: Iterable[Long], out: Collector[ItemViewCount]): Unit = {
-    val itemId = key.asInstanceOf[Tuple1[Long]].f0
-    val windowEnd = window.getEnd
+    val itemId = key.asInstanceOf[Tuple1[Long]].f0 // TODO: Tuple1的f0就是里面的元素
+    val windowEnd: Long = window.getEnd//该window的截止时间
     val count = input.iterator.next()
+    // TODO: 输出，本身apply方法没有返回值，用Collector输出
     out.collect(ItemViewCount(itemId, windowEnd, count))
   }
 }
@@ -125,16 +125,20 @@ class TopNHotItems(topSize: Int) extends KeyedProcessFunction[Tuple, ItemViewCou
     itemViewCountListState = getRuntimeContext.getListState(new ListStateDescriptor[ItemViewCount]("itemViewCount-list", classOf[ItemViewCount]))
   }
 
+  //ctx可以通过timerService获取到当前的watermark、定时器、当前处理时间 等等很多东西
   override def processElement(value: ItemViewCount, ctx: KeyedProcessFunction[Tuple, ItemViewCount, String]#Context, out: Collector[String]): Unit = {
     // 每来一条数据，直接加入ListState
     itemViewCountListState.add(value)
     // 注册一个windowEnd + 1之后触发的定时器
+    // TODO: 这里虽然每条数据都会触发这个方法，重复定义了定时器，
+    //  但是没关系，因为定时器是根据时间戳来的，根据windowEnd分组后，一个组中的数据的时间戳（windowEnd）是一样的
     ctx.timerService().registerEventTimeTimer(value.windowEnd + 1)
   }
 
   // 当定时器触发，可以认为所有窗口统计结果都已到齐，可以排序输出了
   override def onTimer(timestamp: Long, ctx: KeyedProcessFunction[Tuple, ItemViewCount, String]#OnTimerContext, out: Collector[String]): Unit = {
     // 为了方便排序，另外定义一个ListBuffer，保存ListState里面的所有数据
+    //因为itemViewCountListState.get()获取到的是一个iter迭代类型，无法转化成list，不好排序
     val allItemViewCounts: ListBuffer[ItemViewCount] = ListBuffer()
     val iter = itemViewCountListState.get().iterator()
     while(iter.hasNext){
@@ -146,13 +150,14 @@ class TopNHotItems(topSize: Int) extends KeyedProcessFunction[Tuple, ItemViewCou
 
     // 按照count大小排序，取前n个
     val sortedItemViewCounts = allItemViewCounts.sortBy(_.count)(Ordering.Long.reverse).take(topSize)
+   // val sortedItemViewCounts: ListBuffer[ItemViewCount] = allItemViewCounts.sortWith(_.count > _.count).take(topSize)
 
     // 将排名信息格式化成String，便于打印输出可视化展示
     val result: StringBuilder = new StringBuilder
     result.append("窗口结束时间：").append( new Timestamp(timestamp - 1) ).append("\n")
 
     // 遍历结果列表中的每个ItemViewCount，输出到一行
-    for( i <- sortedItemViewCounts.indices ){
+    for( i <- sortedItemViewCounts.indices ){ // TODO: 因为util和to老是分不清，不如直接获取索引来遍历！！起始索引为0
       val currentItemViewCount = sortedItemViewCounts(i)
       result.append("NO").append(i + 1).append(": \t")
         .append("商品ID = ").append(currentItemViewCount.itemId).append("\t")
@@ -161,7 +166,7 @@ class TopNHotItems(topSize: Int) extends KeyedProcessFunction[Tuple, ItemViewCou
 
     result.append("\n==================================\n\n")
 
-    Thread.sleep(1000)
+    Thread.sleep(1000) // 因为从文件读取数据太快，所以减慢速度，模拟下实时的效果
     out.collect(result.toString())
   }
 }
