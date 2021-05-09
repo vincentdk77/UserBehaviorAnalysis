@@ -64,10 +64,13 @@ object HotItems {
       .filter(_.behavior == "pv") // 过滤出pv行为数据
       .keyBy("itemId") // 按照商品ID分组
       .timeWindow(Time.hours(1), Time.minutes(5)) // 设置滑动窗口进行统计
-      .aggregate(new CountAgg(), new ItemViewWindowResult())//第一个参数是预聚合，第二个参数是触发时的窗口函数（入参为预聚合的结果）
+      // TODO: 为什么用这个方法来聚合？
+      //  因为我们在做聚合时拿不到窗口的信息，并且输入输出元素类型必须一样 ，用这个方法可以获取到window信息，并可以将聚和结果进行包装处理（类型变化）！
+      .aggregate(new CountAgg(), new ItemViewWindowResult())//第一个参数是预聚合（定义聚合规则），第二个参数定义输出结构数据（入参为预聚合的结果）
 
     //分组、排序(用到listState、定时器，所以需要大招 process Function)
     // TODO: 为什么这里要重新分组？？？？
+    //  因为aggregate后的还是一个完整的流数据，无法确定当前数据属于哪个窗口，我们不能根据流中的所有数据排序！！这一点跟sparkstreaming不一样！
     val resultStream: DataStream[String] = aggStream
       .keyBy("windowEnd")    // 按照窗口分组，收集当前窗口内的商品count数据
       .process( new TopNHotItems(5) )     // 自定义处理流程
