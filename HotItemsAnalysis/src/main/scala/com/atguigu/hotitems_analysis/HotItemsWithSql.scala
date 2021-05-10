@@ -7,13 +7,7 @@ import org.apache.flink.table.api.scala._
 import org.apache.flink.types.Row
 
 /**
-  * Copyright (c) 2018-2028 尚硅谷 All Rights Reserved 
-  *
-  * Project: UserBehaviorAnalysis
-  * Package: com.atguigu.hotitems_analysis
-  * Version: 1.0
-  *
-  * Created by wushengran on 2020/8/14 10:26
+  * 实时热门统计的另一种实现方式：FLink Table and SQL
   */
 object HotItemsWithSql {
   def main(args: Array[String]): Unit = {

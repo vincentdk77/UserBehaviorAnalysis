@@ -42,7 +42,7 @@ object HotItems {
 
     // 从kafka读取数据
     val properties = new Properties()
-    properties.setProperty("bootstrap.servers", "localhost:9092")
+    properties.setProperty("bootstrap.servers", "hadoop102:9092")
     properties.setProperty("group.id", "consumer-group")
     properties.setProperty("key.deserializer",
       "org.apache.kafka.common.serialization.StringDeserializer")
