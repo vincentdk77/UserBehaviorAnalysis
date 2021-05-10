@@ -17,14 +17,10 @@ import org.apache.flink.util.Collector
 import scala.collection.mutable.ListBuffer
 
 /**
-  * Copyright (c) 2018-2028 尚硅谷 All Rights Reserved 
-  *
-  * Project: UserBehaviorAnalysis
-  * Package: com.atguigu.networkflow_analysis
-  * Version: 1.0
-  *
-  * Created by wushengran on 2020/8/14 11:22
-  */
+ * 实时热门页面流量统计：
+ *  读业务服务器日志，每5秒钟输出一次最近10分钟的页面流量统计
+ *  用户登录的入口流量、不同页面的访问流量都
+ */
 
 // 定义输入数据样例类
 case class ApacheLogEvent(ip: String, userId: String, timestamp: Long, method: String, url: String)
@@ -50,6 +46,12 @@ object HotPagesNetworkFlow {
         val ts = simpleDateFormat.parse(arr(3)).getTime
         ApacheLogEvent(arr(0), arr(1), ts, arr(5), arr(6))
       } )
+      // TODO: 数据乱序时间跨度比较大：大概一分钟，watermark最大延迟时间应该怎么设置呢？
+      //  不应该设置太大，否则就会有很多数据等待，实时效果就不好了
+      //  我们可以使用.allowedLateness(实际最大延迟时间1分钟) —— 允许处理迟到的数据
+      //  当某个数据的时间戳属于的所有窗口都已经关了时，才会输出到侧输出流！！
+      //    （比如当前数据时间戳：10:14:51秒，如果他属于的最大的窗口[10:14:50,10:24:50) 已关闭，此时才会输出到侧输出流）
+      //  步骤：waterMark设置小一点 + window滑动步长设置大一点 + 使用allowedLateness处理1分钟内的数据，使用侧输出流处理allowedLateness也没有处理到的数据
       .assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor[ApacheLogEvent](Time.seconds(1)) {
         override def extractTimestamp(element: ApacheLogEvent): Long = element.timestamp
       })
@@ -92,14 +94,23 @@ class PageViewCountWindowResult() extends WindowFunction[Long, PageViewCount, St
 }
 
 class TopNHotPages(n: Int) extends KeyedProcessFunction[Long, PageViewCount, String]{
+  // TODO: 这里应该用MapState+两个定时器
+  //  每条聚合数据只更新指定key的数据+到达指定时间才清空state
+  //  不能用ListState，因为在延迟到来的数据时，无法更新数据
 //  lazy val pageViewCountListState: ListState[PageViewCount] = getRuntimeContext.getListState(new ListStateDescriptor[PageViewCount]("pageViewCount-list", classOf[PageViewCount]))
-  lazy val pageViewCountMapState: MapState[String, Long] = getRuntimeContext.getMapState(new MapStateDescriptor[String, Long]("pageViewCount-map", classOf[String], classOf[Long]))
+  lazy val pageViewCountMapState: MapState[String, Long] =
+          getRuntimeContext.getMapState(new MapStateDescriptor[String, Long]("pageViewCount-map", classOf[String], classOf[Long]))
 
-  override def processElement(value: PageViewCount, ctx: KeyedProcessFunction[Long, PageViewCount, String]#Context, out: Collector[String]): Unit = {
+  override def processElement(value: PageViewCount, ctx: KeyedProcessFunction[Long, PageViewCount, String]#Context,
+                              out: Collector[String]): Unit = {
 //    pageViewCountListState.add(value)
     pageViewCountMapState.put(value.url, value.count)
+
+    // TODO:这里不可以只定义一个定时器，因为我们前面有  allowedLateness +sideOutputLateData 做了延迟处理，
+    //  所以没有及时处理的数据后面过来的时候（定时器已经触发过，又来了老数据，并且watermark没有更新时），这个定时器暂时无法使用！ 但是该定时器会在下一次watermark更新的时候触发！
     ctx.timerService().registerEventTimeTimer(value.windowEnd + 1)
     // 另外注册一个定时器，1分钟之后触发，这时窗口已经彻底关闭，不再有聚合结果输出，可以清空状态
+    // TODO: 定义了两个定时器，每个定时器达到触发时间，都会触发onTimer方法 ，第二个定时器触发时只需要去清空MapState即可
     ctx.timerService().registerEventTimeTimer(value.windowEnd + 60000L)
   }
 
@@ -111,6 +122,7 @@ class TopNHotPages(n: Int) extends KeyedProcessFunction[Long, PageViewCount, Str
       */
 
     // 判断定时器触发时间，如果已经是窗口结束时间1分钟之后，那么直接清空状态
+    // 第二个定时器触发时，清空状态
     if( timestamp == ctx.getCurrentKey + 60000L ){
       pageViewCountMapState.clear()
       return

@@ -67,15 +67,18 @@ object HotItems {
     val aggStream: DataStream[ItemViewCount] = dataStream
       .filter(_.behavior == "pv") // 过滤出pv行为数据
       .keyBy("itemId") // 按照商品ID分组   todo 注意，这里返回的是[ItemViewCount，Tuple]!!!  key在后面
-      // TODO: 不能用下面这种方式，为什么呢
-      //  其实可以用，而且更好，用这种方式返回的是KeyedStream[UserBehavior, Long]，
-      //  key为long型而不是Tuple，更直观更好处理！只不过后面的processFunction函数也要做相应的修改就是了
+      // TODO: 为什么不能用下面这种方式呢
+      //  其实可以用，而且更好，用这种方式返回的是KeyedStream[UserBehavior, Long]
+      //  key为long型而不是Tuple，更直观更好处理！改过之后，后面的processFunction函数key的类型也要做相应的修改
       //.keyBy(_.itemId)
       // 得到窗口聚合结果
       .timeWindow(Time.hours(1), Time.minutes(5)) // 设置滑动窗口进行统计
       // TODO: 为什么用这个方法来聚合
-      //  因为我们在做聚合时拿不到窗口的信息，并且输入输出元素类型必须一样 ，用这个方法可以获取到window信息，并可以将聚和结果进行包装处理（类型变化）！
-      // TODO: 如果当前数据刚好达到一个窗口截止时间，会触发聚合aggregate操作，但不会触发下面的processFunction排序操作！！ 
+      //  因为我们在做普通聚合时拿不到窗口的信息，并且输入输出元素类型必须一样 ，用这个方法可以获取到window信息，并可以将聚和结果进行包装处理（类型变化）！
+      // TODO: 如果当前数据刚好达到一个窗口截止时间，会触发聚合aggregate操作，但不会触发下面的processFunction排序操作！！
+      //  因为processFunction里面的定时器触发时间=windowEnd+1ms
+      // TODO: 这里的聚合方法，一个窗口只会触发一次，因为是升序的数据，没有延迟的数据到来 ，
+      //  后面的process中的listState的一个key的聚合数据也只有一条，所以每条聚合数据来的时候直接add即可，所以不需要MapState
       .aggregate(new CountAgg(), new ItemViewWindowResult())//第一个参数是预聚合（定义聚合规则），第二个参数定义输出结构数据（入参为预聚合的结果）
 
     //分组、排序(用到listState、定时器，所以需要大招 process Function)
@@ -131,7 +134,7 @@ class ItemViewWindowResult() extends WindowFunction[Long, ItemViewCount, Tuple, 
 
 // 自定义KeyedProcessFunction
 class TopNHotItems(topSize: Int) extends KeyedProcessFunction[Tuple, ItemViewCount, String]{
-  // 先定义状态：ListState
+  // 先定义状态：ListState  每次来数据都会往里面塞数据，定时器触发时会清空ListState
   private var itemViewCountListState: ListState[ItemViewCount] = _
 
   override def open(parameters: Configuration): Unit = {
@@ -140,7 +143,7 @@ class TopNHotItems(topSize: Int) extends KeyedProcessFunction[Tuple, ItemViewCou
 
   //ctx可以通过timerService获取到当前的watermark、定时器、当前处理时间 等等很多东西
   override def processElement(value: ItemViewCount, ctx: KeyedProcessFunction[Tuple, ItemViewCount, String]#Context, out: Collector[String]): Unit = {
-    // 每来一条数据，直接加入ListState
+    // 每来一条数据，直接加入ListState即可，因为每条数据都是聚合后的数据，一个窗口只有一个（升序数据，窗口触发就是完整的数据，没有延迟到来的数据）
     itemViewCountListState.add(value)
     // 注册一个windowEnd + 1之后触发的定时器
     // TODO: 这里虽然每条数据都会触发这个方法，重复定义了定时器，
