@@ -2,7 +2,6 @@ package com.atguigu.hotitems_analysis
 
 import java.sql.Timestamp
 import java.util.Properties
-
 import org.apache.flink.api.common.functions.AggregateFunction
 import org.apache.flink.api.common.serialization.SimpleStringSchema
 import org.apache.flink.api.common.state.{ListState, ListStateDescriptor}
@@ -10,6 +9,7 @@ import org.apache.flink.api.java.tuple.{Tuple, Tuple1}
 import org.apache.flink.configuration.Configuration
 import org.apache.flink.streaming.api.TimeCharacteristic
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction
+import org.apache.flink.streaming.api.functions.timestamps.BoundedOutOfOrdernessTimestampExtractor
 import org.apache.flink.streaming.api.scala._
 import org.apache.flink.streaming.api.scala.function.WindowFunction
 import org.apache.flink.streaming.api.windowing.time.Time
@@ -33,22 +33,23 @@ object HotItems {
   def main(args: Array[String]): Unit = {
     val env = StreamExecutionEnvironment.getExecutionEnvironment
     //todo  如果是真实场景中，前后差5分钟，肯定不会出现乱序，但是在测试中，读的是文件，可能会出现乱序，为了显示的更合理，设置并行度为1
+    // 其实生产环境并行度一般不为1，使用watermark来保证触发window的执行
     env.setParallelism(1)
     env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime) // 定义事件时间语义
 
     // 从文件中读取数据，并转换成样例类，提取时间戳生成watermark
-    val inputStream: DataStream[String] = env.readTextFile("D:\\JavaRelation\\Workpaces\\myproject\\bigData\\flink2020\\UserBehaviorAnalysis\\HotItemsAnalysis\\src\\main\\resources\\UserBehavior.csv")
+//    val inputStream: DataStream[String] = env.readTextFile("D:\\JavaRelation\\Workpaces\\myproject\\bigData\\flink2020\\UserBehaviorAnalysis\\HotItemsAnalysis\\src\\main\\resources\\UserBehavior.csv")
 
     // 从kafka读取数据
-//    val properties = new Properties()
-//    properties.setProperty("bootstrap.servers", "localhost:9092")
-//    properties.setProperty("group.id", "consumer-group")
-//    properties.setProperty("key.deserializer",
-//      "org.apache.kafka.common.serialization.StringDeserializer")
-//    properties.setProperty("value.deserializer",
-//      "org.apache.kafka.common.serialization.StringDeserializer")
-//
-//    val inputStream = env.addSource( new FlinkKafkaConsumer[String]("hotitems", new SimpleStringSchema(), properties) )
+    val properties = new Properties()
+    properties.setProperty("bootstrap.servers", "localhost:9092")
+    properties.setProperty("group.id", "consumer-group")
+    properties.setProperty("key.deserializer",
+      "org.apache.kafka.common.serialization.StringDeserializer")
+    properties.setProperty("value.deserializer",
+      "org.apache.kafka.common.serialization.StringDeserializer")
+
+    val inputStream = env.addSource( new FlinkKafkaConsumer[String]("hotitems", new SimpleStringSchema(), properties) )
 
     val dataStream: DataStream[UserBehavior] = inputStream
       .map(data => {
@@ -58,18 +59,27 @@ object HotItems {
       //提取时间戳生成watermark
       // TODO: 因为是已经排好序的升序的时间戳数据，所以用ascending即可 ，如果是乱序数据要用assignTimestampsAndWatermarks并传入BoundedOutOfOrdernessTimestampExtractor
       .assignAscendingTimestamps(_.timestamp * 1000L)
+      //如果是乱序数据就要用下面的方法
+//      .assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor[UserBehavior](Time.seconds(3)) {//最大乱序时间
+//        override def extractTimestamp(element: UserBehavior): Long = element.timestamp * 1000L
+//      })
 
-    // 得到窗口聚合结果
     val aggStream: DataStream[ItemViewCount] = dataStream
       .filter(_.behavior == "pv") // 过滤出pv行为数据
-      .keyBy("itemId") // 按照商品ID分组
+      .keyBy("itemId") // 按照商品ID分组   todo 注意，这里返回的是[ItemViewCount，Tuple]!!!  key在后面
+      // TODO: 不能用下面这种方式，为什么呢
+      //  其实可以用，而且更好，用这种方式返回的是KeyedStream[UserBehavior, Long]，
+      //  key为long型而不是Tuple，更直观更好处理！只不过后面的processFunction函数也要做相应的修改就是了
+      //.keyBy(_.itemId)
+      // 得到窗口聚合结果
       .timeWindow(Time.hours(1), Time.minutes(5)) // 设置滑动窗口进行统计
-      // TODO: 为什么用这个方法来聚合？
+      // TODO: 为什么用这个方法来聚合
       //  因为我们在做聚合时拿不到窗口的信息，并且输入输出元素类型必须一样 ，用这个方法可以获取到window信息，并可以将聚和结果进行包装处理（类型变化）！
+      // TODO: 如果当前数据刚好达到一个窗口截止时间，会触发聚合aggregate操作，但不会触发下面的processFunction排序操作！！ 
       .aggregate(new CountAgg(), new ItemViewWindowResult())//第一个参数是预聚合（定义聚合规则），第二个参数定义输出结构数据（入参为预聚合的结果）
 
     //分组、排序(用到listState、定时器，所以需要大招 process Function)
-    // TODO: 为什么这里要重新分组？？？？
+    // TODO: 为什么这里要重新分组
     //  因为aggregate后的还是一个完整的流数据，无法确定当前数据属于哪个窗口，我们不能根据流中的所有数据排序！！这一点跟sparkstreaming不一样！
     val resultStream: DataStream[String] = aggStream
       .keyBy("windowEnd")    // 按照窗口分组，收集当前窗口内的商品count数据
@@ -108,7 +118,7 @@ class AvgTs extends AggregateFunction[UserBehavior, (Long, Int), Long]{
     (a._1 + b._1, a._2 + b._2)
 }
 
-// 自定义窗口函数WindowFunction
+// 自定义窗口函数WindowFunction   输入是聚合函数的输出，输出可以自定义
 class ItemViewWindowResult() extends WindowFunction[Long, ItemViewCount, Tuple, TimeWindow] {//注意这里的tuple是flink中的tuple！
   override def apply(key: Tuple, window: TimeWindow, input: Iterable[Long], out: Collector[ItemViewCount]): Unit = {
     val itemId = key.asInstanceOf[Tuple1[Long]].f0 // TODO: Tuple1的f0就是里面的元素
