@@ -7,19 +7,12 @@ import org.apache.flink.streaming.api.windowing.time.Time
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow
 import org.apache.flink.util.Collector
 
-/**
-  * Copyright (c) 2018-2028 尚硅谷 All Rights Reserved 
-  *
-  * Project: UserBehaviorAnalysis
-  * Package: com.atguigu.networkflow_analysis
-  * Version: 1.0
-  *
-  * Created by wushengran on 2020/8/14 15:46
-  */
-
 // 定义输出Uv统计样例类
 case class UvCount(windowEnd: Long, count: Long)
 
+/**
+ * 一段时间（比如一小时）内访问网站的总人数（需要去重！）
+ */
 object UniqueVisitor {
   def main(args: Array[String]): Unit = {
     val env = StreamExecutionEnvironment.getExecutionEnvironment
@@ -49,7 +42,7 @@ object UniqueVisitor {
   }
 }
 
-// 自定义实现全窗口函数，用一个Set结构来保存所有的userId，进行自动去重
+// 自定义实现全窗口函数，用一个Set结构来保存所有的userId，进行自动去重 todo  数据量很大，且去重操作，很占内存！！可以采用布隆过滤器
 class UvCountResult() extends AllWindowFunction[UserBehavior, UvCount, TimeWindow]{
   override def apply(window: TimeWindow, input: Iterable[UserBehavior], out: Collector[UvCount]): Unit = {
     // 定义一个Set

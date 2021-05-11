@@ -14,13 +14,7 @@ import org.apache.flink.util.Collector
 import scala.util.Random
 
 /**
-  * Copyright (c) 2018-2028 尚硅谷 All Rights Reserved 
-  *
-  * Project: UserBehaviorAnalysis
-  * Package: com.atguigu.market_analysis
-  * Version: 1.0
-  *
-  * Created by wushengran on 2020/8/17 10:12
+  * 每隔一段时间统计一次不同渠道不同行为的数据量
   */
 
 // 定义输入数据样例类
@@ -82,7 +76,7 @@ object AppMarketByChannel {
   }
 }
 
-// 自定义ProcessWindowFunction
+// 自定义ProcessWindowFunction todo  数据会缓存，数据量大的时候不建议使用这个方式，还是预聚合的方式最好！
 class MarketCountByChannel() extends ProcessWindowFunction[MarketUserBehavior, MarketViewCount, (String, String), TimeWindow]{
   override def process(key: (String, String), context: Context, elements: Iterable[MarketUserBehavior], out: Collector[MarketViewCount]): Unit = {
     val start = new Timestamp(context.window.getStart).toString

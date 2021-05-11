@@ -13,21 +13,14 @@ import org.apache.flink.util.Collector
 
 import scala.util.Random
 
-/**
-  * Copyright (c) 2018-2028 尚硅谷 All Rights Reserved 
-  *
-  * Project: UserBehaviorAnalysis
-  * Package: com.atguigu.networkflow_analysis
-  * Version: 1.0
-  *
-  * Created by wushengran on 2020/8/14 14:30
-  */
-
 // 定义输入数据样例类
 case class UserBehavior(userId: Long, itemId: Long, categoryId: Int, behavior: String, timestamp: Long)
 // 定义输出pv统计的样例类
 case class PvCount(windowEnd: Long, count: Long)
 
+/**
+ * 每一小时统计一次网站页面总浏览量（统计PV）
+ */
 object PageView {
   def main(args: Array[String]): Unit = {
     val env = StreamExecutionEnvironment.getExecutionEnvironment
@@ -50,7 +43,7 @@ object PageView {
       .filter(_.behavior == "pv")
 //      .map( data => ("pv", 1L) )    // 定义一个pv字符串作为分组的dummy key
       .map( new MyMapper() )
-      .keyBy( _._1 )     // 所有数据会被分到同一个组
+      .keyBy( _._1 )     // todo  所有数据会被分到同一个组，在同一个slot中（因为我们的key都是"pv"），所以在上面我们自己写了Map方法，增加key的种类
       .timeWindow( Time.hours(1) )    // 1小时滚动窗口
       .aggregate( new PvCountAgg(), new PvCountWindowResult() )
 
