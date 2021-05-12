@@ -13,13 +13,8 @@ import org.apache.flink.streaming.api.windowing.windows.TimeWindow
 import org.apache.flink.util.Collector
 
 /**
-  * Copyright (c) 2018-2028 尚硅谷 All Rights Reserved 
-  *
-  * Project: UserBehaviorAnalysis
-  * Package: com.atguigu.market_analysis
-  * Version: 1.0
-  *
-  * Created by wushengran on 2020/8/17 11:01
+  * 每隔一段时间统计一次不同省份的所有广告的点击量
+ *  针对同一个用户短时间内对同一个广告点击很多次需要过滤（并且输出黑名单+每天0点定时清空状态）
   */
 
 // 定义输入输出样例类

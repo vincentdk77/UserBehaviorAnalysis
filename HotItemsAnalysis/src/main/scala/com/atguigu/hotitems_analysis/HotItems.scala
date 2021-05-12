@@ -145,7 +145,7 @@ class TopNHotItems(topSize: Int) extends KeyedProcessFunction[Tuple, ItemViewCou
   override def processElement(value: ItemViewCount, ctx: KeyedProcessFunction[Tuple, ItemViewCount, String]#Context, out: Collector[String]): Unit = {
     // 每来一条数据，直接加入ListState即可，因为每条数据都是聚合后的数据，一个窗口只有一个（升序数据，窗口触发就是完整的数据，没有延迟到来的数据）
     itemViewCountListState.add(value)
-    // 注册一个windowEnd + 1之后触发的定时器
+    // 注册一个windowEnd + 1之后触发的定时器(因为这个窗口中每条数据时间都是windowEnd，必须要等窗口所有数据都到齐，也就是waterMark>windowEnd时)
     // TODO: 这里虽然每条数据都会触发这个方法，重复定义了定时器，
     //  但是没关系，因为定时器是根据时间戳来的，根据windowEnd分组后，一个组中的数据的时间戳（windowEnd）是一样的
     ctx.timerService().registerEventTimeTimer(value.windowEnd + 1)

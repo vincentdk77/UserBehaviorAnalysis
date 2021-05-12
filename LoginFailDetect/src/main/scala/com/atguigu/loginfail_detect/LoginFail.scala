@@ -10,21 +10,14 @@ import org.apache.flink.util.Collector
 
 import scala.collection.mutable.ListBuffer
 
-/**
-  * Copyright (c) 2018-2028 尚硅谷 All Rights Reserved 
-  *
-  * Project: UserBehaviorAnalysis
-  * Package: com.atguigu.loginfail_detect
-  * Version: 1.0
-  *
-  * Created by wushengran on 2020/8/17 14:15
-  */
-
 // 输入的登录事件样例类
 case class LoginEvent(userId: Long, ip: String, eventType: String, timestamp: Long)
 // 输出报警信息样例类
 case class LoginFailWarning(userId: Long, firstFailTime: Long, lastFailTime: Long, waringMsg: String)
 
+/**
+ * 如果同一用户（可以是不同 IP） 在 2 秒之内连续2次登录失败，就认为存在恶意登录的风险，输出相关的信息进行报警提示。
+ */
 object LoginFail {
   def main(args: Array[String]): Unit = {
     val env = StreamExecutionEnvironment.getExecutionEnvironment

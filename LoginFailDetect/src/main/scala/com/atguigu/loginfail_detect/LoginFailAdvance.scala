@@ -9,14 +9,14 @@ import org.apache.flink.streaming.api.windowing.time.Time
 import org.apache.flink.util.Collector
 
 /**
-  * Copyright (c) 2018-2028 尚硅谷 All Rights Reserved 
-  *
-  * Project: UserBehaviorAnalysis
-  * Package: com.atguigu.loginfail_detect
-  * Version: 1.0
-  *
-  * Created by wushengran on 2020/8/17 15:07
-  */
+ * 改良版
+ * 来一条数据，如果是成功的，直接清空状态
+ * 如果是失败的，判断前后两次失败的时间差是否小于2s，就立即报警
+ * 优点：不需要定时器，非得2s后才报警
+ * 缺点：如果需求是2s内3次或者更多次登录失败，判断就非常复杂！
+ *        并且如果是乱序数据就可能有bug，比如42,45,43,44   ，只会输出（43,44），不会输出（42，43）
+ * 考虑使用CEP（Complex Event Processing，复杂事件处理）
+ */
 object LoginFailAdvance {
   def main(args: Array[String]): Unit = {
     val env = StreamExecutionEnvironment.getExecutionEnvironment
@@ -37,7 +37,7 @@ object LoginFailAdvance {
         override def extractTimestamp(element: LoginEvent): Long = element.timestamp * 1000L
       })
 
-    // 进行判断和检测，如果2秒之内连续登录失败，输出报警信息
+    // todo 进行判断和检测，如果2秒之内连续登录失败，输出报警信息
     val loginFailWarningStream = loginEventStream
       .keyBy(_.userId)
       .process( new LoginFailWaringAdvanceResult() )
