@@ -52,7 +52,7 @@ object LoginFailWithCep {
     // 2. 将模式应用到数据流上，得到一个PatternStream
     val patternStream = CEP.pattern(loginEventStream.keyBy(_.userId), loginFailPattern)
 
-    // 3. 检出符合模式的数据流，需要调用select
+    // 3. 检出符合模式的数据流，需要调用select提取匹配的事件进行处理
     val loginFailWarningStream = patternStream.select(new LoginFailEventMatch())
 
     loginFailWarningStream.print()
@@ -63,6 +63,7 @@ object LoginFailWithCep {
 
 // 实现自定义PatternSelectFunction
 class LoginFailEventMatch() extends PatternSelectFunction[LoginEvent, LoginFailWarning] {
+  //这里的List里面只有一个元素，其实他可以有多个元素（key为每个模式的名称，value 就是所有接收到的事件的 Iterable 类型）
   override def select(pattern: util.Map[String, util.List[LoginEvent]]): LoginFailWarning = {
     // 当前匹配到的事件序列，就保存在Map里
     //    val firstFailEvent = pattern.get("firstFail").iterator().next()
